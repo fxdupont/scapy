@@ -552,6 +552,10 @@ def in6_isanycast(x):  # RFC 2526
         return 0
 
 
+def in6_ilnpnid(a):
+    nid = inet_pton(socket.AF_INET6, a)[8:16]
+    return inet_ntop(socket.AF_INET6, b"\x00" * 8 + nid)
+
 def _in6_bitops(a1, a2, operator=0):
     a1 = struct.unpack('4I', a1)
     a2 = struct.unpack('4I', a2)

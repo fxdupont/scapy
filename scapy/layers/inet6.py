@@ -57,7 +57,7 @@ from scapy.utils import checksum, strxor
 from scapy.pton_ntop import inet_pton, inet_ntop
 from scapy.utils6 import in6_getnsma, in6_getnsmac, in6_isaddr6to4, \
     in6_isaddrllallnodes, in6_isaddrllallservers, in6_isaddrTeredo, \
-    in6_isllsnmaddr, in6_ismaddr, Net6, teredoAddrExtractInfo
+    in6_isllsnmaddr, in6_ismaddr, Net6, teredoAddrExtractInfo, in6_ilnpnid
 from scapy.volatile import RandInt, RandShort
 
 if not socket.has_ipv6:
@@ -587,6 +587,7 @@ def in6_chksum(nh, u, p):
     ph6.nh = nh
     rthdr = 0
     hahdr = 0
+    ilnp = 0
     final_dest_addr_found = 0
     while u is not None and not isinstance(u, IPv6):
         if (isinstance(u, IPv6ExtHdrRouting) and
@@ -602,6 +603,9 @@ def in6_chksum(nh, u, p):
         elif (isinstance(u, IPv6ExtHdrDestOpt) and (len(u.options) == 1) and
               isinstance(u.options[0], HAO)):
             hahdr = u.options[0].hoa
+        elif (isinstance(u, IPv6ExtHdrDestOpt) and
+              isinstance(u.options[0], Nonce)):
+            ilnp = 1
         u = u.underlayer
     if u is None:
         warning("No IPv6 underlayer to compute checksum. Leaving null.")
@@ -614,6 +618,9 @@ def in6_chksum(nh, u, p):
         ph6.dst = rthdr
     else:
         ph6.dst = u.dst
+    if ilnp:
+        ph6.src = in6_ilnpnid(ph6.src)
+        ph6.dst = in6_ilnpnid(ph6.dst)
     ph6.uplen = len(p)
     ph6s = raw(ph6)
     return checksum(ph6s + p)
@@ -639,6 +646,7 @@ _hbhopts = {0x00: "Pad1",
             0x04: "Tunnel Encapsulation Limit",
             0x05: "Router Alert",
             0x06: "Quick-Start",
+            0x8b: "Nonce",
             0xc2: "Jumbo Payload",
             0xc9: "Home Address Option"}
 
@@ -649,7 +657,7 @@ class _OTypeField(ByteEnumField):
     based on its option type value (What should be done by nodes that process
     the option if they do not understand it ...)
 
-    It is used by Jumbo, Pad1, PadN, RouterAlert, HAO options
+    It is used by Jumbo, Pad1, PadN, RouterAlert, HAO, Nonce options
     """
     pol = {0x00: "00: skip",
            0x40: "01: discard",
@@ -779,10 +787,23 @@ class HAO(Packet):  # IPv6 Destination Options Header Option
     def extract_padding(self, p):
         return b"", p
 
+class Nonce(Packet):  # Identifier-Locator Network Protocol Nonce - RFC 6744
+    name = "Nonce"
+    fields_desc = [_OTypeField("otype", 0x8b, _hbhopts),
+                   FieldLenField("optlen", None, length_of="optdata", fmt="B"),
+                   StrLenField("optdata", "",
+                               length_from=lambda pkt: pkt.optlen)]
+
+    def alignment_delta(self, curpos):  # No alignment requirement
+        return 0
+
+    def extract_padding(self, p):
+        return b"", p
 
 _hbhoptcls = {0x00: Pad1,
               0x01: PadN,
               0x05: RouterAlert,
+              0x8B: Nonce,
               0xC2: Jumbo,
               0xC9: HAO}
 
