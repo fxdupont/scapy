@@ -42,10 +42,10 @@ from scapy.data import DLT_IPV6, DLT_RAW, DLT_RAW_ALT, ETHER_ANY, ETH_P_IPV6, \
     MTU
 from scapy.error import warning
 from scapy.fields import BitEnumField, BitField, ByteEnumField, ByteField, \
-    DestIP6Field, FieldLenField, FlagsField, IntField, IP6Field, \
+    DestIP6Field, Field, FieldLenField, FlagsField, IntField, IP6Field, \
     LongField, MACField, PacketLenField, PacketListField, ShortEnumField, \
     ShortField, SourceIP6Field, StrField, StrFixedLenField, StrLenField, \
-    X3BytesField, XBitField, XIntField, XShortField
+    X3BytesField, XBitField, XIntField, XShortField, in6_ptop
 from scapy.layers.inet import IP, IPTools, TCP, TCPerror, TracerouteResult, \
     UDP, UDPerror
 from scapy.layers.l2 import CookedLinux, Ether, GRE, Loopback, SNAP
@@ -1266,6 +1266,7 @@ icmp6typescls = {1: "ICMPv6DestUnreach",
                  151: "ICMPv6MRD_Advertisement",
                  152: "ICMPv6MRD_Solicitation",
                  153: "ICMPv6MRD_Termination",
+                 156: "ICMPv6ILNPLocatorUpdate",
                  }
 
 icmp6typesminhdrlen = {1: 8,
@@ -1293,7 +1294,8 @@ icmp6typesminhdrlen = {1: 8,
                        147: 8,
                        151: 8,
                        152: 4,
-                       153: 4
+                       153: 4,
+                       156: 20
                        }
 
 icmp6types = {1: "Destination unreachable",
@@ -1327,6 +1329,7 @@ icmp6types = {1: "Destination unreachable",
               151: "Multicast Router Advertisement",
               152: "Multicast Router Solicitation",
               153: "Multicast Router Termination",
+              156: "ILNP Locator Update",
               200: "Private Experimentation",
               201: "Private Experimentation"}
 
@@ -3234,6 +3237,87 @@ _mip6_mhtype2cls = {0: MIP6MH_BRR,
                     6: MIP6MH_BA,
                     7: MIP6MH_BE}
 
+
+# Identifier-Locator Network Protocol
+
+class _ILNP6LocatorField(Field):
+    def __init__(self, name, default):
+        Field.__init__(self, name, default, "8s")
+
+    def h2i(self, pkt, x):
+        if isinstance(x, bytes):
+            b = x + b"\x00" * 7 + b"\x01"
+            x = inet_ntop(socket.AF_INET6, b)
+            x = x[:-1]
+        if isinstance(x, str):
+            if x[-2:] == "::":
+                x = in6_ptop(x + "1")
+            else:
+                x = in6_ptop(x + "::1")
+            x = x[:-1]
+        elif isinstance(x, list):
+            x = [self.h2i(pkt, n) for n in x]
+        return x
+
+    def i2m(self, pkt, x):
+        if x is None:
+            x = "::"
+        if x[-2:] == "::":
+            x = in6_ptop(x + "1")
+        else:
+            x = in6_ptop(x + "::1")
+        return inet_pton(socket.AF_INET6, x)[:8]
+
+    def m2i(self, pkt, x):
+        b = x + b"\x00" * 7 + b"\x01"
+        return inet_ntop(socket.AF_INET6, b)[:-1]
+
+    def any2i(self, pkt, x):
+        return self.h2i(pkt, x)
+
+    def i2repr(self, pkt, x):
+        if x is None:
+            return self.i2h(pkt, x)
+        r = self.i2h(pkt, x)
+        return r if isinstance(r, str) else repr(r)
+
+class ILNP6LocatorInfo(Packet):
+    name = "ILNP6 Locator Update - Locator Info"
+    fields_desc = [_ILNP6LocatorField("locator", "::"),
+                   XShortField("preference", 0xffff),
+                   XShortField("lifetime", 0)]
+
+    def mysummary(self):
+        return self.sprintf("%name% %locator% pref %preference% "
+                            "ttl %lifetime%")
+
+    def default_payload_class(self, packet):
+        "Locator Info followed by another one"""
+        return self.__class__
+
+class ICMPv6ILNPLocatorUpdate(_ICMPv6):
+    name = "ILNPv6 Locator Update"
+    fields_desc = [ByteEnumField("type", 156, icmp6types),
+                   ByteField("code", 0),
+                   XShortField("cksum", None),
+                   ByteField("locs_number", None),
+                   ByteEnumField(
+                       "operation", 0,
+                       {0: "advertisement",
+                        1: "acknowledgement"}),
+                   ShortField("reserved", None),
+                   PacketListField("locators", [], ILNP6LocatorInfo,
+                                   count_from=lambda p: p.locs_number)]
+
+    def mysummary(self):
+        return self.sprintf("%name% #locs %locs%")
+
+    def post_build(self, packet, payload):
+        """Compute the 'locs_number' field when needed"""
+        if self.locs_number is None:
+            locs = struct.pack("!B", len(self.locators))
+            packet = packet[:4] + locs + packet[5:]
+        return _ICMPv6.post_build(self, packet, payload)
 
 #############################################################################
 #############################################################################
