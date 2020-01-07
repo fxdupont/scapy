@@ -581,6 +581,9 @@ def in6_chksum(nh, u, p):
         provided with all under layers (IPv6 and all extension headers,
         for example)
     :param p: the payload of the upper layer provided as a string
+
+    Added support for ILNP6 which uses NIDs (vs full addresses) in
+    the pseudo header at the exception of ICMPv6.
     """
 
     ph6 = PseudoIPv6()
@@ -618,7 +621,7 @@ def in6_chksum(nh, u, p):
         ph6.dst = rthdr
     else:
         ph6.dst = u.dst
-    if ilnp:
+    if ilnp and nh != 58:
         ph6.src = in6_ilnpnid(ph6.src)
         ph6.dst = in6_ilnpnid(ph6.dst)
     ph6.uplen = len(p)
